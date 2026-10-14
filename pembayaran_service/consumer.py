@@ -1,21 +1,15 @@
 """
-PEMBAYARAN SERVICE  (Consumer 3, sekaligus Producer)
+Pembayaran service (consumer dan producer).
 
-Tanggung jawab:
-  - Menerima pesan "order.created" dari queue q_pembayaran
-  - Membuat tagihan lalu memotong saldo dompet digital pelanggan
-  - Mengirim hasilnya ke broker:
-        saldo cukup       -> pesan "payment.success"
-        saldo tidak cukup -> pesan "payment.failed"
+Memproses tagihan untuk setiap pesan "order.created" dari queue q_pembayaran
+dengan memotong saldo dompet digital pelanggan, lalu mengirim hasilnya ke
+exchange:
+- payment.success : saldo mencukupi
+- payment.failed  : saldo tidak mencukupi
 
-Service ini tidak tahu siapa yang akan menerima hasilnya. Broker yang mengantar:
-  - payment.success dan payment.failed -> Notifikasi (berlangganan "payment.*")
-  - payment.failed                     -> Gudang (untuk mengembalikan stok)
-Inilah routing berdasarkan topik / publish-subscribe (slide 59).
-
-Cara menjalankan (dari folder utama proyek):
-    python -m pembayaran_service.consumer             # jeda proses 3 detik
-    python -m pembayaran_service.consumer --delay 8   # jeda proses 8 detik
+Penggunaan:
+    python -m pembayaran_service.consumer             # jeda pemrosesan 3 detik
+    python -m pembayaran_service.consumer --delay 8   # jeda pemrosesan 8 detik
 """
 import argparse
 import time
@@ -26,10 +20,9 @@ from common.message import marshal, unmarshal
 from common.util import log, rupiah, waktu_sekarang
 
 NAMA = "PEMBAYARAN"
-JEDA_PROSES = 3  # detik, diubah lewat argumen --delay
+JEDA_PROSES = 3  # detik; dapat diubah melalui argumen --delay
 
-# Saldo dompet digital tiap pelanggan (disimpan di memori, simulasi sederhana).
-# Atur nilainya untuk demo: Inem cukup untuk beli Laptop, Budi tidak.
+# Saldo awal dompet digital per pelanggan (simulasi, disimpan di memori)
 SALDO = {
     "Inem": 50_000_000,
     "Siti": 20_000_000,
@@ -37,11 +30,15 @@ SALDO = {
     "Budi": 1_000_000,
     "Andi": 500_000,
 }
-SALDO_PELANGGAN_BARU = 2_000_000  # untuk nama yang belum terdaftar di atas
+SALDO_PELANGGAN_BARU = 2_000_000  # saldo awal untuk pelanggan yang belum terdaftar
 
 
 def proses_pembayaran(pelanggan: str, total: int):
-    """Mengecek dan memotong saldo. Mengembalikan (berhasil?, keterangan)."""
+    """
+    Memotong saldo pelanggan jika mencukupi.
+
+    Mengembalikan tuple (berhasil, keterangan).
+    """
     saldo = SALDO.setdefault(pelanggan, SALDO_PELANGGAN_BARU)
     if saldo >= total:
         SALDO[pelanggan] = saldo - total
@@ -50,6 +47,7 @@ def proses_pembayaran(pelanggan: str, total: int):
 
 
 def proses_pesan(ch, method, properties, body):
+    """Callback consumer: memproses tagihan dan mengirim hasil pembayaran."""
     try:
         pesanan = unmarshal(body)
         order_id = pesanan["order_id"]
@@ -62,8 +60,7 @@ def proses_pesan(ch, method, properties, body):
 
     log(NAMA, f"Pesanan #{order_id}: membuat tagihan {rupiah(total)} untuk {pelanggan}...")
 
-    # Simulasi proses pembayaran yang lama. Perhatikan: selama jeda ini,
-    # Order service TETAP bisa menerima pesanan baru (komunikasi asinkron).
+    # Simulasi waktu pemrosesan pembayaran
     time.sleep(JEDA_PROSES)
 
     berhasil, keterangan = proses_pembayaran(pelanggan, total)
@@ -72,7 +69,7 @@ def proses_pesan(ch, method, properties, body):
     hasil = {
         "order_id": order_id,
         "pelanggan": pelanggan,
-        "item": pesanan["item"],       # dibutuhkan Gudang untuk mengembalikan stok
+        "item": pesanan["item"],       # diperlukan Gudang service untuk pengembalian stok
         "jumlah": pesanan["jumlah"],
         "total": total,
         "status": "LUNAS" if berhasil else "GAGAL",
@@ -80,7 +77,7 @@ def proses_pesan(ch, method, properties, body):
         "waktu": waktu_sekarang(),
     }
 
-    # Sekarang service ini berperan sebagai PRODUCER: kirim hasil pembayaran ke broker.
+    # Kirim hasil pembayaran ke exchange; penentuan penerima ditangani broker
     ch.basic_publish(
         exchange=config.EXCHANGE_NAME,
         routing_key=routing_key,

@@ -1,13 +1,9 @@
 """
-Fungsi bantu untuk berhubungan dengan RabbitMQ.
+Utilitas koneksi dan deklarasi topologi RabbitMQ.
 
-Langkah-langkahnya sama dengan contoh rabbitpy di slide 65-66:
-  1. buat koneksi ke server RabbitMQ
-  2. buat channel di atas koneksi itu
-  3. deklarasikan exchange
-  4. deklarasikan queue lalu bind (ikat) queue ke exchange dengan sebuah key
-Bedanya, di sini kita memakai library `pika` (library Python untuk AMQP yang
-dipakai di tutorial resmi RabbitMQ). Konsep dan urutannya tetap sama.
+Menyediakan fungsi untuk membuka koneksi, mendeklarasikan exchange dan queue,
+serta properti standar untuk pesan persisten. Modul ini menggunakan library
+pika sebagai klien AMQP 0-9-1.
 """
 import sys
 
@@ -17,7 +13,12 @@ from common import config
 
 
 def buka_koneksi():
-    """Membuka koneksi ke RabbitMQ dan membuat satu channel."""
+    """
+    Membuka koneksi ke RabbitMQ dan membuat satu channel.
+
+    Menghentikan program dengan pesan error jika broker tidak dapat dihubungi.
+    Mengembalikan tuple (koneksi, channel).
+    """
     kredensial = pika.PlainCredentials(config.RABBITMQ_USER, config.RABBITMQ_PASS)
     parameter = pika.ConnectionParameters(
         host=config.RABBITMQ_HOST,
@@ -34,24 +35,27 @@ def buka_koneksi():
         )
         sys.exit(1)
 
-    # Satu koneksi bisa berisi banyak channel (slide 64).
+    # Channel adalah jalur komunikasi logis di atas satu koneksi TCP
     channel = koneksi.channel()
     return koneksi, channel
 
 
 def deklarasi_exchange(channel):
-    """Membuat exchange jika belum ada. Aman dipanggil berkali-kali."""
+    """Mendeklarasikan exchange utama. Aman dipanggil berulang kali (idempoten)."""
     channel.exchange_declare(
         exchange=config.EXCHANGE_NAME,
         exchange_type=config.EXCHANGE_TYPE,
-        durable=True,  # exchange tetap ada walaupun RabbitMQ di-restart
+        durable=True,  # tetap tersedia setelah broker dijalankan ulang
     )
 
 
 def deklarasi_queue(channel, nama_queue):
-    """Membuat queue dan mengikatnya ke exchange sesuai aturan di config.TOPOLOGI."""
-    # durable=True -> queue disimpan di disk, tidak hilang saat broker restart.
-    # Ini bagian penting dari komunikasi PERSISTEN (slide 21).
+    """
+    Mendeklarasikan queue dan mengikatnya ke exchange sesuai config.TOPOLOGI.
+
+    Aman dipanggil berulang kali (idempoten).
+    """
+    # Queue durable disimpan ke disk sehingga tidak hilang saat broker dijalankan ulang
     channel.queue_declare(queue=nama_queue, durable=True)
 
     for pola in config.TOPOLOGI[nama_queue]:
@@ -63,7 +67,7 @@ def deklarasi_queue(channel, nama_queue):
 
 
 def properti_persisten():
-    """Properti pesan: JSON dan persisten (delivery_mode=2 = disimpan ke disk)."""
+    """Properti pesan JSON dengan delivery_mode=2 agar pesan disimpan ke disk."""
     return pika.BasicProperties(
         content_type="application/json",
         delivery_mode=2,

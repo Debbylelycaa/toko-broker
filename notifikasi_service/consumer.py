@@ -1,16 +1,13 @@
 """
-NOTIFIKASI SERVICE  (Consumer 2 / Subscriber)
+Notifikasi service (consumer).
 
-Tanggung jawab:
-  - Menerima pesan dari queue q_notifikasi
-  - Menampilkan notifikasi untuk pelanggan
+Menampilkan notifikasi kepada pelanggan berdasarkan pesan dari queue
+q_notifikasi, yang menerima pola "order.*" dan "payment.*":
+- order.created   : pesanan diterima
+- payment.success : pembayaran berhasil
+- payment.failed  : pembayaran gagal dan pesanan dibatalkan
 
-Queue ini berlangganan DUA topik sekaligus: "order.*" dan "payment.*".
-Jadi notifikasi muncul saat pesanan dibuat, saat pembayaran lunas,
-DAN saat pembayaran gagal (payment.success maupun payment.failed cocok dengan "payment.*").
-Inilah contoh routing berdasarkan topik / publish-subscribe (slide 59).
-
-Cara menjalankan (dari folder utama proyek):
+Penggunaan:
     python -m notifikasi_service.consumer
 """
 from common import config
@@ -22,6 +19,7 @@ NAMA = "NOTIFIKASI"
 
 
 def proses_pesan(ch, method, properties, body):
+    """Callback consumer: menyusun notifikasi sesuai routing key."""
     try:
         data = unmarshal(body)
     except ValueError as err:
@@ -29,7 +27,6 @@ def proses_pesan(ch, method, properties, body):
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         return
 
-    # Label (routing key) memberi tahu pesan ini tentang apa.
     topik = method.routing_key
 
     if topik == config.RK_ORDER_CREATED:
@@ -45,8 +42,6 @@ def proses_pesan(ch, method, properties, body):
             f"sebesar {rupiah(data['total'])} BERHASIL.",
         )
     elif topik == config.RK_PAYMENT_FAILED:
-        # Pesan ini sampai ke sini TANPA mengubah aturan binding,
-        # karena pola "payment.*" sudah mencakup "payment.failed".
         log(
             NAMA,
             f"Kepada {data['pelanggan']}: pembayaran pesanan #{data['order_id']} "

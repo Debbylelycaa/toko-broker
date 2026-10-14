@@ -1,20 +1,18 @@
 """
-Marshalling dan unmarshalling pesan (slide 7-11).
+Serialisasi pesan.
 
-- marshal()   : data Python (dict)  -> JSON (bytes) yang bisa dikirim lewat jaringan
-- unmarshal() : JSON (bytes)        -> data Python (dict) yang bisa dipakai program
-
-Semua service sepakat memakai JSON. Inilah "common messaging protocol"
-yang disebut di slide 59: semua aplikasi menyepakati format pesan yang sama.
+Seluruh pesan antar-service menggunakan format JSON dengan encoding UTF-8.
+- marshal()   : dict -> bytes JSON, sebelum pesan dikirim ke broker
+- unmarshal() : bytes JSON -> dict, setelah pesan diterima dari broker
 """
 import json
 
 
 def marshal(data: dict) -> bytes:
-    """Mengemas dict menjadi JSON lalu mengubahnya ke bytes (socket/broker hanya mengirim bytes)."""
+    """Mengubah dict menjadi bytes JSON (UTF-8)."""
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
 def unmarshal(body: bytes) -> dict:
-    """Membuka kembali bytes JSON menjadi dict Python."""
+    """Mengubah bytes JSON (UTF-8) menjadi dict."""
     return json.loads(body.decode("utf-8"))

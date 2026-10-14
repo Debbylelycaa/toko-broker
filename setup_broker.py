@@ -1,13 +1,14 @@
 """
-SETUP BROKER - jalankan SEKALI sebelum service lain.
+Inisialisasi topologi broker.
 
-Script ini membuat exchange, semua queue, dan aturan binding di RabbitMQ.
+Mendeklarasikan exchange, seluruh queue, dan binding sesuai config.TOPOLOGI.
+Jalankan sekali sebelum service lain, dan jalankan ulang setiap kali
+TOPOLOGI berubah.
 
-Kenapa perlu? Kalau Order service mengirim pesan sebelum queue-nya ada,
-exchange tidak punya tujuan dan pesan akan dibuang. Dengan menyiapkan queue
-lebih dulu, pesan tetap tersimpan walaupun consumer-nya belum dinyalakan.
+Queue perlu tersedia sebelum producer mengirim pesan, karena pesan yang
+tidak cocok dengan binding mana pun akan dibuang oleh exchange.
 
-Cara menjalankan (dari folder utama proyek):
+Penggunaan:
     python setup_broker.py
 """
 from common import config

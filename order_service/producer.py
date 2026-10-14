@@ -1,18 +1,13 @@
 """
-ORDER SERVICE  (Producer / Publisher)
+Order service (producer).
 
-Tanggung jawab:
-  - Menerima input pesanan dari user
-  - Mengemas pesanan menjadi JSON (marshalling)
-  - Mengirim pesanan ke broker dengan label "order.created"
+Menerima input pesanan, menyusunnya menjadi pesan JSON, lalu mengirimnya ke
+exchange dengan routing key "order.created". Service ini tidak bergantung pada
+consumer mana pun; distribusi pesan sepenuhnya ditangani oleh broker.
 
-Order service TIDAK tahu siapa saja yang akan menerima pesannya.
-Ia hanya tahu alamat broker. Setelah broker menyatakan pesan diterima,
-Order service langsung lanjut melayani pesanan berikutnya (asinkron).
-
-Cara menjalankan (dari folder utama proyek):
+Penggunaan:
     python -m order_service.producer            # mode interaktif
-    python -m order_service.producer --demo 3   # kirim 3 pesanan contoh otomatis
+    python -m order_service.producer --demo 3   # mengirim 3 pesanan contoh
 """
 import argparse
 import random
@@ -27,7 +22,7 @@ from common.util import log, rupiah, waktu_sekarang
 
 NAMA = "ORDER"
 
-# Daftar barang dan harganya (sederhana, tanpa database)
+# Katalog produk dan harga satuan (Rupiah)
 KATALOG = {
     "Laptop": 15_000_000,
     "Mouse": 150_000,
@@ -36,7 +31,7 @@ KATALOG = {
 
 
 def buat_pesanan(pelanggan: str, item: str, jumlah: int) -> dict:
-    """Membuat objek pesanan (masih berupa dict Python biasa)."""
+    """Menyusun data pesanan dengan ID unik dan harga dari katalog."""
     return {
         "order_id": uuid.uuid4().hex[:6].upper(),
         "pelanggan": pelanggan,
@@ -48,15 +43,20 @@ def buat_pesanan(pelanggan: str, item: str, jumlah: int) -> dict:
 
 
 def kirim_pesanan(channel, pesanan: dict) -> bool:
-    """PUT: mengirim pesan ke broker (operasi PUT pada slide 56)."""
-    body = marshal(pesanan)  # dict -> JSON bytes
+    """
+    Mengirim pesanan ke exchange sebagai pesan persisten.
+
+    Mengembalikan True jika broker mengonfirmasi penerimaan, atau False jika
+    pesan tidak dapat dirutekan ke queue mana pun maupun ditolak broker.
+    """
+    body = marshal(pesanan)
     try:
         channel.basic_publish(
             exchange=config.EXCHANGE_NAME,
             routing_key=config.RK_ORDER_CREATED,
             body=body,
             properties=properti_persisten(),
-            mandatory=True,  # beri tahu kami kalau tidak ada queue yang menampung
+            mandatory=True,  # memicu error jika tidak ada queue yang cocok
         )
     except pika.exceptions.UnroutableError:
         log(NAMA, "GAGAL: belum ada queue yang menampung pesan. Jalankan setup_broker.py dulu.")
@@ -74,7 +74,7 @@ def kirim_pesanan(channel, pesanan: dict) -> bool:
 
 
 def cari_item(teks: str):
-    """Mencocokkan input user dengan katalog tanpa peduli huruf besar/kecil."""
+    """Mencari nama produk di katalog tanpa membedakan huruf besar/kecil."""
     for nama in KATALOG:
         if nama.lower() == teks.strip().lower():
             return nama
@@ -82,6 +82,7 @@ def cari_item(teks: str):
 
 
 def mode_interaktif(channel):
+    """Membaca input pesanan dari terminal hingga pengguna mengetik 'exit'."""
     print("\n=== ORDER SERVICE ===")
     print("Katalog: " + ", ".join(f"{k} ({rupiah(v)})" for k, v in KATALOG.items()))
     print("Ketik 'exit' pada nama pelanggan untuk keluar.\n")
@@ -90,7 +91,7 @@ def mode_interaktif(channel):
         pelanggan = input("Nama pelanggan : ").strip()
         if pelanggan.lower() == "exit":
             break
-        pelanggan = pelanggan.title()  # "inem" -> "Inem", supaya cocok dengan data saldo
+        pelanggan = pelanggan.title()  # normalisasi agar cocok dengan data saldo
         if not pelanggan:
             print("  Nama tidak boleh kosong.\n")
             continue
@@ -113,7 +114,7 @@ def mode_interaktif(channel):
 
 
 def mode_demo(channel, banyak: int):
-    """Mengirim beberapa pesanan contoh sekaligus (praktis untuk demo)."""
+    """Mengirim sejumlah pesanan dengan data acak."""
     nama_contoh = ["Inem", "Budi", "Siti", "Andi", "Rina"]
     for _ in range(banyak):
         pesanan = buat_pesanan(
@@ -132,8 +133,7 @@ def main():
     koneksi, channel = buka_koneksi()
     deklarasi_exchange(channel)
 
-    # Publisher confirm: broker membalas "pesan sudah saya terima & simpan".
-    # Ini adalah respons opsional "status penerimaan" pada slide 61 (panah nomor 3).
+    # Publisher confirms: broker mengonfirmasi setiap pesan yang berhasil diterima
     channel.confirm_delivery()
 
     try:

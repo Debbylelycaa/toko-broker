@@ -1,10 +1,10 @@
 """
-CEK ANTRIAN - melihat berapa pesan yang sedang menunggu di setiap queue.
+Pemantauan queue.
 
-Berguna saat demo komunikasi persisten: matikan satu consumer, kirim pesanan,
-lalu jalankan script ini untuk membuktikan pesannya tersimpan di broker.
+Menampilkan jumlah pesan yang menunggu dan jumlah consumer aktif
+untuk setiap queue yang terdaftar di config.TOPOLOGI.
 
-Cara menjalankan:
+Penggunaan:
     python cek_antrian.py
 """
 import pika
@@ -19,11 +19,11 @@ def main():
     print("-" * 47)
 
     for nama_queue in config.TOPOLOGI:
-        # Pakai channel baru untuk tiap queue, karena kalau queue belum ada,
-        # broker akan menutup channel yang dipakai.
+        # Channel terpisah per queue: deklarasi pasif terhadap queue yang
+        # belum ada menyebabkan broker menutup channel tersebut.
         channel = koneksi.channel()
         try:
-            # passive=True -> hanya mengecek, tidak membuat queue baru
+            # passive=True hanya memeriksa keberadaan queue tanpa membuatnya
             hasil = channel.queue_declare(queue=nama_queue, passive=True)
             print(
                 f"{nama_queue:<15} {hasil.method.message_count:>15} "

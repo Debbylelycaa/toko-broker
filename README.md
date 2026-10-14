@@ -1,14 +1,14 @@
-# Toko Broker: Sistem Pemesanan dengan Message Broker
+# Toko Broker
 
-Aplikasi pemesanan toko online sederhana yang menerapkan **message broker (RabbitMQ)**,
-mengikuti contoh arsitektur pada slide 61 materi *Chapter 04: Communication*.
+Sistem pemesanan toko online berbasis event dengan RabbitMQ sebagai message broker.
+Setiap service berjalan sebagai proses terpisah dan hanya berkomunikasi secara
+asinkron melalui broker, tanpa saling memanggil secara langsung.
 
-Satu **producer** (Order service) mengirim pesanan ke broker, lalu broker meneruskannya ke
-tiga **consumer** yang masing-masing punya tanggung jawab sendiri: Gudang, Notifikasi, dan Pembayaran.
-Semua service ditulis dengan Python dan berkomunikasi **hanya lewat broker**.
+Alur pemesanan mengikuti pola toko online: pesanan dicatat terlebih dahulu,
+pembayaran diproses secara terpisah, lalu hasilnya disampaikan kepada pelanggan
+melalui notifikasi.
 
-Order service berperan seperti tombol *Checkout* di toko online, bukan kasir: pelanggan memesan,
-lalu pembayaran diproses di belakang layar dan hasilnya dikabarkan lewat notifikasi.
+## Arsitektur
 
 ```
 Order service ──► [ RabbitMQ: exchange "toko" ] ──► q_gudang      ──► Gudang service
@@ -18,37 +18,84 @@ Order service ──► [ RabbitMQ: exchange "toko" ] ──► q_gudang      �
                                                           └── payment.success / failed ◄────┘
 ```
 
-Label (routing key) yang dipakai dan siapa penerimanya:
+Order service mengirim pesan `order.created` ke exchange `toko` bertipe *topic*.
+Exchange meneruskan pesan ke setiap queue yang pola binding-nya cocok. Pembayaran
+service memproses tagihan, kemudian mengirim `payment.success` atau `payment.failed`
+ke exchange yang sama.
 
-| Label | Dikirim oleh | Diterima oleh |
+### Routing key
+
+| Routing key | Pengirim | Penerima |
 |---|---|---|
-| `order.created` | Order service | Gudang (kurangi stok), Pembayaran (buat tagihan), Notifikasi |
+| `order.created` | Order service | Gudang (mengurangi stok), Pembayaran (membuat tagihan), Notifikasi |
 | `payment.success` | Pembayaran service | Notifikasi |
-| `payment.failed` | Pembayaran service | Notifikasi, Gudang (kembalikan stok) |
+| `payment.failed` | Pembayaran service | Notifikasi, Gudang (mengembalikan stok) |
 
-## Struktur folder
+### Format pesan
+
+Seluruh pesan menggunakan JSON (UTF-8). Contoh pesan `order.created`:
+
+```json
+{
+  "order_id": "B3F824",
+  "pelanggan": "Inem",
+  "item": "Laptop",
+  "jumlah": 2,
+  "harga": 15000000,
+  "waktu": "16:05:32"
+}
+```
+
+Contoh pesan `payment.failed`:
+
+```json
+{
+  "order_id": "2BEC2E",
+  "pelanggan": "Budi",
+  "item": "Laptop",
+  "jumlah": 1,
+  "total": 15000000,
+  "status": "GAGAL",
+  "keterangan": "saldo tidak cukup (saldo Rp1.000.000, tagihan Rp15.000.000)",
+  "waktu": "16:52:56"
+}
+```
+
+Format pesan dan routing key merupakan kontrak antar-service. Perubahan pada
+keduanya harus disesuaikan di seluruh service yang terdampak.
+
+## Struktur Proyek
 
 ```
 toko-broker/
-├── docker-compose.yml          menjalankan RabbitMQ
-├── requirements.txt            library Python yang dibutuhkan (pika)
-├── setup_broker.py             menyiapkan exchange, queue, dan binding (jalankan sekali)
-├── cek_antrian.py              melihat jumlah pesan yang menunggu di tiap queue
+├── docker-compose.yml               Konfigurasi container RabbitMQ
+├── requirements.txt                 Dependensi Python
+├── setup_broker.py                  Inisialisasi exchange, queue, dan binding
+├── cek_antrian.py                   Pemantauan jumlah pesan per queue
 ├── common/
-│   ├── config.py               alamat broker, nama exchange/queue, aturan binding
-│   ├── broker.py               fungsi koneksi & deklarasi exchange/queue
-│   ├── message.py              marshal (dict → JSON) dan unmarshal (JSON → dict)
-│   └── util.py                 log bertimestamp & format rupiah
-├── order_service/producer.py           Producer: menerima input pesanan
-├── gudang_service/consumer.py          Consumer 1: kurangi stok, kembalikan stok jika gagal bayar
-├── notifikasi_service/consumer.py      Consumer 2: menampilkan notifikasi
-└── pembayaran_service/consumer.py      Consumer 3: cek saldo, kirim payment.success / payment.failed
+│   ├── config.py                    Konfigurasi koneksi, routing key, dan topologi
+│   ├── broker.py                    Utilitas koneksi dan deklarasi RabbitMQ
+│   ├── message.py                   Serialisasi pesan JSON
+│   └── util.py                      Utilitas log dan format Rupiah
+├── order_service/producer.py        Producer: menerima dan mengirim pesanan
+├── gudang_service/consumer.py       Consumer: mengelola stok
+├── notifikasi_service/consumer.py   Consumer: menampilkan notifikasi
+└── pembayaran_service/consumer.py   Consumer dan producer: memproses pembayaran
 ```
 
-## Persiapan
+## Prasyarat
 
-1. Install **Python 3.8+** dan **Docker Desktop**.
-2. Buka terminal di folder `toko-broker`, lalu install library:
+- Docker Desktop (atau Docker Engine dengan plugin Docker Compose)
+- Python 3.8 atau lebih baru
+
+## Instalasi
+
+1. Clone repository:
+   ```
+   git clone https://github.com/Debbylelycaa/toko-broker.git
+   cd toko-broker
+   ```
+2. Install dependensi Python:
    ```
    pip install -r requirements.txt
    ```
@@ -56,30 +103,68 @@ toko-broker/
    ```
    docker compose up -d
    ```
-   Tunggu sekitar 10–20 detik. Dashboard bisa dibuka di http://localhost:15672
-   (username `guest`, password `guest`).
+   Tunggu 10–20 detik hingga RabbitMQ siap. Management UI tersedia di
+   http://localhost:15672 (username `guest`, password `guest`).
 
-   > Tanpa Docker: install Erlang lalu RabbitMQ dari situs resmi rabbitmq.com,
-   > kemudian aktifkan dashboard dengan `rabbitmq-plugins enable rabbitmq_management`.
+## Menjalankan Aplikasi
 
-## Cara menjalankan
-
-**Penting:** semua perintah dijalankan dari folder utama `toko-broker`, dan service dijalankan
-dengan `python -m ...` (pakai titik, bukan garis miring). Di Windows gunakan `python`,
-di Mac/Linux mungkin `python3`.
+Seluruh perintah dijalankan dari direktori root proyek. Service dijalankan sebagai
+modul (`python -m`), sehingga gunakan tanda titik sebagai pemisah dan tanpa ekstensi `.py`.
+Pada macOS/Linux, ganti `python` dengan `python3` jika diperlukan.
 
 | Langkah | Terminal | Perintah |
 |---|---|---|
-| 1 | Terminal 1 | `python setup_broker.py` (cukup sekali) |
+| 1 | Terminal 1 | `python setup_broker.py` |
 | 2 | Terminal 2 | `python -m gudang_service.consumer` |
 | 3 | Terminal 3 | `python -m notifikasi_service.consumer` |
 | 4 | Terminal 4 | `python -m pembayaran_service.consumer` |
 | 5 | Terminal 1 | `python -m order_service.producer` |
 
-Di Order service, isi nama pelanggan, nama barang (`Laptop`, `Mouse`, atau `Keyboard`), dan jumlah.
-Ketik `exit` untuk keluar.
+Langkah 1 cukup dijalankan sekali, dan perlu dijalankan ulang setiap kali
+`TOPOLOGI` di `common/config.py` berubah. Setiap service dapat dihentikan dengan `Ctrl+C`.
 
-Pembayaran disimulasikan dengan saldo dompet digital (atur di `pembayaran_service/consumer.py`):
+### Opsi tambahan
+
+| Perintah | Keterangan |
+|---|---|
+| `python -m order_service.producer --demo N` | Mengirim N pesanan dengan data acak, lalu keluar |
+| `python -m pembayaran_service.consumer --delay N` | Mengatur lama simulasi pemrosesan pembayaran (detik, bawaan 3) |
+| `python cek_antrian.py` | Menampilkan jumlah pesan menunggu dan consumer aktif per queue |
+
+### Menghentikan RabbitMQ
+
+```
+docker compose down       # menghentikan container, data queue tetap tersimpan
+docker compose down -v    # menghentikan container dan menghapus seluruh data
+```
+
+## Konfigurasi
+
+Parameter koneksi dapat diubah melalui environment variable:
+
+| Variabel | Bawaan |
+|---|---|
+| `RABBITMQ_HOST` | `localhost` |
+| `RABBITMQ_PORT` | `5672` |
+| `RABBITMQ_USER` | `guest` |
+| `RABBITMQ_PASS` | `guest` |
+
+## Data Simulasi
+
+Data berikut disimpan di memori masing-masing service dan kembali ke nilai awal
+setiap kali service dijalankan ulang.
+
+**Katalog** (`order_service/producer.py`)
+
+| Produk | Harga |
+|---|---|
+| Laptop | Rp15.000.000 |
+| Mouse | Rp150.000 |
+| Keyboard | Rp450.000 |
+
+**Stok awal** (`gudang_service/consumer.py`): Laptop 20, Mouse 50, Keyboard 30.
+
+**Saldo dompet digital** (`pembayaran_service/consumer.py`)
 
 | Pelanggan | Saldo awal |
 |---|---|
@@ -88,77 +173,52 @@ Pembayaran disimulasikan dengan saldo dompet digital (atur di `pembayaran_servic
 | Rina | Rp5.000.000 |
 | Budi | Rp1.000.000 |
 | Andi | Rp500.000 |
-| nama lain | Rp2.000.000 |
+| Pelanggan lain | Rp2.000.000 |
 
-Harga: Laptop Rp15.000.000, Mouse Rp150.000, Keyboard Rp450.000. Jadi Inem bisa membeli Laptop,
-sedangkan Budi akan gagal membeli Laptop tapi berhasil membeli Mouse. Untuk mengirim beberapa pesanan contoh sekaligus:
-`python -m order_service.producer --demo 3`.
+## Skenario Pengujian
 
-Hentikan service mana pun dengan **Ctrl+C**.
+**1. Pemrosesan asinkron.** Jalankan Pembayaran service dengan `--delay 8`, lalu kirim
+beberapa pesanan. Order service tetap dapat menerima pesanan baru tanpa menunggu
+pembayaran selesai, terlihat dari timestamp pada log.
 
-## Skenario demo
+**2. Persistensi pesan.** Hentikan Gudang service, lalu kirim tiga pesanan. Jalankan
+`python cek_antrian.py` atau buka menu *Queues* di Management UI: `q_gudang` berisi
+tiga pesan yang menunggu. Saat Gudang service dijalankan kembali, ketiga pesan
+langsung diproses.
 
-**1. Komunikasi asinkron.** Jalankan Pembayaran dengan jeda lama:
-`python -m pembayaran_service.consumer --delay 8`. Kirim beberapa pesanan. Perhatikan jam di log:
-Order service langsung selesai dan bisa menerima pesanan baru, sementara Pembayaran
-masih memproses satu per satu.
+**3. Acknowledgement dan pengiriman ulang.** Jalankan Pembayaran service dengan
+`--delay 10`, kirim satu pesanan, lalu hentikan service sebelum status pembayaran
+muncul. Karena pesan belum di-*acknowledge*, broker mempertahankannya dan mengirim
+ulang pesan tersebut saat service dijalankan kembali.
 
-**2. Komunikasi persisten.** Matikan Gudang service (Ctrl+C). Kirim 3 pesanan. Jalankan
-`python cek_antrian.py`, maka `q_gudang` berisi 3 pesan menunggu (atau lihat di dashboard,
-menu *Queues*). Nyalakan lagi Gudang service, ketiga pesan langsung diproses.
-Bandingkan dengan program socket chat (slide 40–48) yang langsung error kalau server mati.
+**4. Pembayaran gagal.** Kirim pesanan atas nama `Budi` untuk `1` `Laptop`. Pembayaran
+service mengirim `payment.failed`, yang diterima oleh dua service sekaligus:
+Notifikasi menampilkan pemberitahuan pembayaran gagal, dan Gudang mengembalikan stok
+yang sebelumnya dikurangi.
 
-**3. Toleransi kesalahan (ack).** Jalankan Pembayaran dengan `--delay 10`, kirim satu pesanan,
-lalu tekan Ctrl+C sebelum muncul tulisan LUNAS. Karena pesan belum di-ack, broker menyimpannya.
-Nyalakan lagi Pembayaran, pesanan yang sama diproses ulang dari awal.
+**5. Urutan pesan.** Hentikan Gudang service, lalu ulangi skenario 4. `q_gudang` akan
+berisi dua pesan (`order.created`, lalu `payment.failed`). Saat Gudang service dijalankan
+kembali, stok dikurangi lalu dikembalikan sesuai urutan.
 
-**4. Pembayaran gagal dan publish-subscribe.** Pesan atas nama `Budi`, barang `Laptop`, jumlah `1`.
-Pembayaran mengirim `payment.failed`. Pesan itu sampai ke dua service sekaligus: Notifikasi
-menampilkan "pembayaran GAGAL" (tanpa mengubah aturan binding, karena `payment.*` sudah mencakupnya),
-dan Gudang mengembalikan stok Laptop yang tadi sempat dikurangi. Pembayaran sendiri tidak tahu
-siapa saja penerimanya; broker yang mengatur.
+**6. Penambahan consumer baru.** Tambahkan queue baru beserta polanya ke `TOPOLOGI`
+di `common/config.py`, buat service consumer baru, lalu jalankan `setup_broker.py`.
+Order service tidak memerlukan perubahan apa pun.
 
-**5. Urutan pesan tetap terjaga.** Matikan Gudang, lalu ulangi skenario 4. Jalankan `cek_antrian.py`:
-`q_gudang` berisi 2 pesan (`order.created` lalu `payment.failed`). Nyalakan Gudang, stok dikurangi
-lalu dikembalikan sesuai urutan, karena queue bersifat FIFO.
+## Pemecahan Masalah
 
-**6. Decoupling (tambah service tanpa mengubah producer).** Salin `notifikasi_service` menjadi
-service baru (misalnya `laporan_service`), ganti nama queue-nya, lalu tambahkan queue itu ke
-`TOPOLOGI` di `common/config.py`. Order service tidak perlu diubah sama sekali.
-
-## Pemetaan ke materi
-
-| Konsep di slide | Wujudnya di kode |
+| Gejala | Penyebab dan solusi |
 |---|---|
-| Persistent communication (slide 21) | `queue_declare(durable=True)` dan `delivery_mode=2` di `common/broker.py` |
-| Asynchronous communication (slide 21, 23) | Order service tidak menunggu consumer; terlihat di skenario demo 1 |
-| Operasi PUT (slide 56) | `channel.basic_publish(...)` di `order_service/producer.py` |
-| Operasi NOTIFY (slide 56) | `channel.basic_consume(on_message_callback=...)` di setiap consumer |
-| Queue manager (slide 57–58) | Server RabbitMQ |
-| Message broker: routing per topik / publish-subscribe (slide 59) | Exchange tipe `topic`; satu pesan `payment.failed` diterima Notifikasi dan Gudang sekaligus; pola `payment.*` mencakup `payment.success` dan `payment.failed` |
-| Arsitektur broker: *Rules* dan *Queuing layer* (slide 60) | `TOPOLOGI` di `common/config.py` (rules) dan queue di RabbitMQ (queuing layer) |
-| Respons status penerimaan (slide 61, panah 3) | `channel.confirm_delivery()` di Order service |
-| Marshalling / unmarshalling (slide 7–11) | `marshal()` dan `unmarshal()` di `common/message.py` |
-| Connection & channel AMQP (slide 64–66) | `buka_koneksi()` di `common/broker.py` |
-| `message.ack()` (slide 66) | `ch.basic_ack(...)` di setiap consumer |
+| `ModuleNotFoundError: No module named 'common'` | Perintah tidak dijalankan dari direktori root atau tidak menggunakan `python -m`. Jalankan dari folder `toko-broker` dengan format `python -m nama_service.file`. |
+| `Tidak bisa terhubung ke RabbitMQ` | Container belum berjalan atau belum siap. Periksa dengan `docker ps`, jalankan `docker compose up -d`, lalu tunggu beberapa detik. |
+| `belum ada queue yang menampung pesan` | Topologi belum diinisialisasi. Jalankan `python setup_broker.py`. |
+| Gudang tidak menerima `payment.failed` | Binding lama masih digunakan. Jalankan ulang `python setup_broker.py`. |
+| Port 5672 atau 15672 sudah digunakan | Ada instance RabbitMQ lain yang berjalan. Hentikan instance tersebut atau ubah pemetaan port di `docker-compose.yml`. |
 
-## Masalah yang sering muncul
+## Batasan
 
-- **`ModuleNotFoundError: No module named 'common'`**: jalankan dari folder utama `toko-broker`
-  dengan format `python -m nama_service.file` (tanpa `.py`).
-- **`Tidak bisa terhubung ke RabbitMQ`**: RabbitMQ belum berjalan. Cek dengan `docker ps`
-  atau buka dashboard di http://localhost:15672.
-- **Order service menampilkan "belum ada queue yang menampung pesan"**: jalankan
-  `python setup_broker.py` terlebih dahulu.
-- **Stok atau saldo kembali ke awal**: stok (Gudang) dan saldo (Pembayaran) disimpan di memori,
-  jadi kembali ke nilai awal setiap kali service dinyalakan ulang. Untuk pengembangan, keduanya bisa
-  dipindah ke database.
-- **Sudah pernah menjalankan versi lama?** Jalankan `python setup_broker.py` sekali lagi supaya
-  `q_gudang` ikut berlangganan `payment.failed`.
-
-## Batasan yang disengaja
-
-Ini simulasi untuk mempelajari komunikasi lewat broker, jadi beberapa hal dibuat sederhana.
-Contohnya, jika stok tidak cukup tetapi pembayaran berhasil, pelanggan tetap ditagih. Di sistem
-sungguhan, Gudang bisa mengirim pesan seperti `stock.unavailable` agar Pembayaran mengembalikan dana.
-Pola ini bisa ditambahkan dengan cara yang sama seperti `payment.failed`.
+- Stok dan saldo disimpan di memori, belum menggunakan database.
+- Jika stok tidak mencukupi tetapi pembayaran berhasil, pelanggan tetap ditagih.
+  Penanganan ini dapat ditambahkan dengan routing key baru, misalnya
+  `stock.unavailable`, yang memicu pengembalian dana di Pembayaran service.
+- Koneksi menggunakan kredensial bawaan `guest` dan tanpa TLS, sehingga hanya
+  ditujukan untuk lingkungan pengembangan lokal.
