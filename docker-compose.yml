@@ -1,0 +1,13 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management   # RabbitMQ + dashboard web
+    container_name: rabbitmq-toko
+    hostname: rabbitmq-toko        # agar data queue tetap terbaca setelah container dibuat ulang
+    ports:
+      - "5672:5672"     # port AMQP, dipakai oleh semua service Python
+      - "15672:15672"   # dashboard: http://localhost:15672 (guest / guest)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq   # simpan pesan persisten di disk
+
+volumes:
+  rabbitmq_data:
